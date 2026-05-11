@@ -1,0 +1,17 @@
+{
+  "$schema": "https://docs.openclaw.ai/schemas/plugin-manifest.json",
+  "id": "saga",
+  "name": "Saga",
+  "description": "Continue-site coordinator for long-running tasks. Skill-routed trigger, loose schema, worker-as-injection, deep evaluator, cascading recovery.",
+  "skills": ["skills"],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "stateRoot": {
+        "type": "string",
+        "description": "Absolute directory for saga run state. Defaults to <workspace>/.saga."
+      }
+    }
+  }
+}

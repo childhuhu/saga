@@ -1,0 +1,26 @@
+{
+  "id": "bench-fake",
+  "version": "1.0.0",
+  "description": "Fake profile for bench-profile testing",
+  "domain": "generic",
+  "assumedModel": { "minTier": "standard", "capabilities": ["tool-use"] },
+  "strategy": { "kind": "planner-worker-evaluator", "fixerEnabled": true },
+  "bootstrap": [],
+  "progressSchema": { "kind": "checklist", "itemFields": {}, "appendOnly": true },
+  "contractTemplate": { "requiredSections": [], "minMachineChecks": 0, "maxNegotiationRounds": 1 },
+  "evaluator": {
+    "intensity": "light",
+    "requireExternalCheck": false,
+    "hardThresholds": [],
+    "rubric": { "criteria": [{ "id": "completeness", "weight": 1, "description": "Done", "scoringGuide": "5=done" }] }
+  },
+  "invariants": [],
+  "recovery": { "resumeStrategy": "reset", "maxReworkPerStage": 2, "contextResetThresholdRatio": 0.8, "stuckDetection": { "noProgressReworkLimit": 2 } },
+  "budget": { "maxTokens": 50000, "maxWallClockMinutes": 10 },
+  "benchGoal": {
+    "goal": "count from 1 to 5",
+    "expectedArtifacts": ["count.txt"],
+    "maxTokens": 10000,
+    "maxWallClockMs": 30000
+  }
+}

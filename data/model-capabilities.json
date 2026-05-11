@@ -1,0 +1,5 @@
+{
+  "claude-sonnet-4-6":         { "tier": "strong",   "capabilities": ["tool-use", "code", "long-context"] },
+  "claude-opus-4-6":           { "tier": "strong",   "capabilities": ["tool-use", "code", "long-context"] },
+  "claude-haiku-4-5-20251001": { "tier": "standard", "capabilities": ["tool-use", "code"] }
+}

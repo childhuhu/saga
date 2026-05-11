@@ -1,0 +1,162 @@
+{
+  "id": "curation-default",
+  "version": "0.1.0",
+  "description": "Data curation profile. Schema-compliance and consistency are primary quality gates. Suited for content classification, dataset cleaning, taxonomy building, and structured output preparation.",
+  "domain": "curation",
+
+  "assumedModel": {
+    "minTier": "standard",
+    "capabilities": ["long-context", "tool-use"]
+  },
+
+  "strategy": {
+    "kind": "single-worker",
+    "evaluatorEnabled": true
+  },
+
+  "bootstrap": [
+    {
+      "id": "read-task",
+      "description": "Read the saga task.json so the worker knows the curation goal and current stage.",
+      "kind": "read-file",
+      "spec": { "path": "task.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-progress",
+      "description": "Read progress.json to see which items have already been processed and validated.",
+      "kind": "read-file",
+      "spec": { "path": "progress.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-latest-checkpoint",
+      "description": "Read the most recent checkpoint to resume batch processing context.",
+      "kind": "read-file",
+      "spec": { "path": "checkpoints/latest.json", "optional": true },
+      "failurePolicy": "report-and-continue"
+    }
+  ],
+
+  "progressSchema": {
+    "kind": "checklist",
+    "itemFields": {
+      "itemId": "string",
+      "category": "string",
+      "schemaValid": "boolean",
+      "notes": "string"
+    },
+    "appendOnly": true
+  },
+
+  "contractTemplate": {
+    "requiredSections": ["scope", "doneCriteria", "verificationPlan", "outOfScope"],
+    "minMachineChecks": 2,
+    "maxNegotiationRounds": 3
+  },
+
+  "evaluator": {
+    "intensity": "standard",
+    "requireExternalCheck": false,
+    "fewShotCalibrationPath": "data/few-shot-rubrics/curation.md",
+    "checklist": {
+      "hard": [
+        {
+          "id": "H1",
+          "title": "Schema compliance",
+          "passDescription": "every output record validates against the declared schema",
+          "failReworkDescription": "some records have schema violations that can be fixed",
+          "failEscalateDescription": "the declared schema is contradictory or the source data cannot fit the schema"
+        },
+        {
+          "id": "H2",
+          "title": "Coverage",
+          "passDescription": "outputCount / inputCount ≥ declaredThreshold (default 0.95 unless filtering was explicitly requested)",
+          "failReworkDescription": "coverage is below threshold but more items can be processed",
+          "failEscalateDescription": "source data is too incomplete or corrupt to reach the coverage threshold"
+        },
+        {
+          "id": "H3",
+          "title": "Subjective scores calibrated",
+          "passDescription": "for any 1–5 score field, spot-checks show scores are not all clumped (e.g., not 90% scored 3)",
+          "failReworkDescription": "score distribution is skewed; recalibration in rework can fix it",
+          "failEscalateDescription": "the scoring criteria are inherently subjective and cannot be made consistent"
+        }
+      ],
+      "soft": [
+        { "id": "S1", "title": "Schema correctness", "weight": 0.3, "scoringGuide": "5 = zero schema violations; 1 = widespread violations" },
+        { "id": "S2", "title": "Subjective-score consistency", "weight": 0.3, "scoringGuide": "5 = scores follow rubric consistently; 1 = random-seeming scores" },
+        { "id": "S3", "title": "Coverage", "weight": 0.2, "scoringGuide": "5 = all scoped items processed; 1 = major gaps" },
+        { "id": "S4", "title": "Output organization", "weight": 0.2, "scoringGuide": "5 = well-structured, easy to navigate; 1 = disorganized dump" }
+      ]
+    },
+    "rubric": {
+      "criteria": [
+        {
+          "id": "completeness",
+          "weight": 0.25,
+          "description": "All items in scope have been processed and appear in the output.",
+          "scoringGuide": "5 = 100% of scoped items processed; 1 = major gaps in coverage."
+        },
+        {
+          "id": "consistency",
+          "weight": 0.3,
+          "description": "Similar items are categorised/labelled consistently throughout the dataset.",
+          "scoringGuide": "5 = no inconsistencies found; 1 = same item type labelled differently in multiple places."
+        },
+        {
+          "id": "schema-compliance",
+          "weight": 0.3,
+          "description": "All output records conform to the declared output schema.",
+          "scoringGuide": "5 = zero schema violations; 1 = widespread schema violations."
+        },
+        {
+          "id": "coverage",
+          "weight": 0.1,
+          "description": "All declared categories/tags have been applied where appropriate; no under-coverage.",
+          "scoringGuide": "5 = all categories well-represented; 1 = major categories missing."
+        },
+        {
+          "id": "clarity",
+          "weight": 0.05,
+          "description": "The curation report is clear and a successor worker can understand decisions made.",
+          "scoringGuide": "5 = decision rationale documented throughout; 1 = opaque categorisation."
+        }
+      ]
+    },
+    "hardThresholds": [
+      { "criterionId": "consistency", "min": 3 },
+      { "criterionId": "schema-compliance", "min": 4 }
+    ]
+  },
+
+  "invariants": [
+    {
+      "kind": "file-exists",
+      "id": "progress-file",
+      "path": "progress.json"
+    }
+  ],
+
+  "recovery": {
+    "resumeStrategy": "reset",
+    "maxReworkPerStage": 3,
+    "contextResetThresholdRatio": 0.7,
+    "stuckDetection": {
+      "noProgressReworkLimit": 2
+    }
+  },
+
+  "budget": {
+    "maxTokens": 400000,
+    "maxWallClockMinutes": 120,
+    "perStageTokenCap": 100000
+  },
+
+  "benchGoal": {
+    "goal": "Classify 5 product descriptions into categories (electronics, clothing, food, books) and write results to categories.json.",
+    "expectedArtifacts": ["categories.json"],
+    "maxTokens": 50000,
+    "maxWallClockMs": 120000
+  }
+}

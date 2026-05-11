@@ -1,0 +1,21 @@
+# build artifacts
+node_modules/
+dist/
+coverage/
+*.tgz
+
+# editors
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# local dev runtime
+runs/
+tmp/
+*.log
+.vitest-cache/
+
+# local agent / AI assistant artifacts (per-user, do not commit)
+.claude/
+CLAUDE.md

@@ -1,0 +1,3 @@
+{
+  "known-model": { "tier": "strong", "capabilities": ["tool-use", "code"] }
+}

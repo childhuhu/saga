@@ -1,0 +1,87 @@
+{
+  "name": "openclaw-plugin-saga",
+  "version": "1.0.0",
+  "description": "Saga — long-running task harness for OpenClaw. Continue-site coordinator with skill-routed trigger, loose stage-spec, cascading recovery, and a data-driven deep evaluator. Zero core modifications.",
+  "license": "MIT",
+  "author": "childhuhu",
+  "homepage": "https://github.com/childhuhu/saga#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/childhuhu/saga.git"
+  },
+  "bugs": {
+    "url": "https://github.com/childhuhu/saga/issues"
+  },
+  "keywords": [
+    "openclaw",
+    "openclaw-plugin",
+    "agent",
+    "harness",
+    "long-running",
+    "long-running-tasks",
+    "llm-orchestration",
+    "saga",
+    "workflow"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "type": "module",
+  "main": "./dist/adapters/openclaw-plugin.js",
+  "types": "./dist/adapters/openclaw-plugin.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/adapters/openclaw-plugin.d.ts",
+      "import": "./dist/adapters/openclaw-plugin.js"
+    },
+    "./core": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "import": "./dist/types.js"
+    }
+  },
+  "files": [
+    "dist",
+    "profiles",
+    "prompts",
+    "skills",
+    "data",
+    "openclaw.plugin.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "openclaw": {
+    "extensions": [
+      "./dist/adapters/openclaw-plugin.js"
+    ]
+  },
+  "scripts": {
+    "build": "tsc && cp src/prompts/*.md dist/prompts/",
+    "build:watch": "tsc --watch",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "openclaw": "*"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^2.1.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}

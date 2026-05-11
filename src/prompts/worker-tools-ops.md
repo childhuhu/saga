@@ -1,0 +1,1 @@
+Use `command` for ALL diagnosis (ping, traceroute, ip, iw, log tail). Use `read` for config files. Use `memory_search` to check for prior incidents BEFORE diagnosing. Every change needs a revert command.

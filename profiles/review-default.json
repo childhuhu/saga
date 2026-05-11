@@ -1,0 +1,163 @@
+{
+  "id": "review-default",
+  "version": "0.1.0",
+  "description": "Independent review profile. Deep evaluator with external check required. Strict hard thresholds on thoroughness and accuracy. Suited for code review, architecture review, security audit, and compliance review.",
+  "domain": "review",
+
+  "assumedModel": {
+    "minTier": "strong",
+    "capabilities": ["long-context", "tool-use", "code"]
+  },
+
+  "strategy": {
+    "kind": "single-worker",
+    "evaluatorEnabled": true
+  },
+
+  "bootstrap": [
+    {
+      "id": "read-task",
+      "description": "Read the saga task.json so the worker knows the review goal and current stage.",
+      "kind": "read-file",
+      "spec": { "path": "task.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-progress",
+      "description": "Read progress.json to see which review criteria have already been addressed.",
+      "kind": "read-file",
+      "spec": { "path": "progress.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-latest-checkpoint",
+      "description": "Read the most recent checkpoint to resume the review with prior findings.",
+      "kind": "read-file",
+      "spec": { "path": "checkpoints/latest.json", "optional": true },
+      "failurePolicy": "report-and-continue"
+    }
+  ],
+
+  "progressSchema": {
+    "kind": "checklist",
+    "itemFields": {
+      "finding": "string",
+      "severity": "string",
+      "location": "string",
+      "recommendation": "string",
+      "verified": "boolean"
+    },
+    "appendOnly": true
+  },
+
+  "contractTemplate": {
+    "requiredSections": ["scope", "doneCriteria", "verificationPlan", "outOfScope"],
+    "minMachineChecks": 1,
+    "maxNegotiationRounds": 3
+  },
+
+  "evaluator": {
+    "intensity": "deep",
+    "requireExternalCheck": true,
+    "fewShotCalibrationPath": "data/few-shot-rubrics/review.md",
+    "checklist": {
+      "hard": [
+        {
+          "id": "H1",
+          "title": "Findings cite the artifact",
+          "passDescription": "every finding includes a quote or precise location (line range / section heading / file:line) from the reviewed artifact",
+          "failReworkDescription": "some findings lack specific artifact references; the reviewer can add them from the source material",
+          "failEscalateDescription": "the artifact was not supplied or is inaccessible, making citation impossible"
+        },
+        {
+          "id": "H2",
+          "title": "Severity assigned",
+          "passDescription": "every finding has severity (blocker / major / minor / nit) and a one-sentence rationale",
+          "failReworkDescription": "some findings lack severity or rationale; can be added in rework",
+          "failEscalateDescription": "the artifact is too large or complex to meaningfully assess severity"
+        },
+        {
+          "id": "H3",
+          "title": "Coverage stated",
+          "passDescription": "the review explicitly lists what was checked AND what was NOT (out-of-scope, deferred, blocked-on-info). No silent gaps.",
+          "failReworkDescription": "coverage is partially stated; the reviewer can enumerate gaps in rework",
+          "failEscalateDescription": "the scope was never defined, making coverage assessment impossible"
+        }
+      ],
+      "soft": [
+        { "id": "S1", "title": "Insight depth", "weight": 0.4, "scoringGuide": "5 = non-obvious findings with root-cause analysis; 1 = surface-level observations only" },
+        { "id": "S2", "title": "Severity calibration", "weight": 0.2, "scoringGuide": "5 = severities match industry norms; 1 = everything is a blocker or everything is a nit" },
+        { "id": "S3", "title": "Coverage breadth", "weight": 0.2, "scoringGuide": "5 = comprehensive across all declared scope; 1 = narrow focus on one area" },
+        { "id": "S4", "title": "Actionability of findings", "weight": 0.2, "scoringGuide": "5 = every finding has a concrete fix; 1 = vague complaints" }
+      ]
+    },
+    "rubric": {
+      "criteria": [
+        {
+          "id": "thoroughness",
+          "weight": 0.35,
+          "description": "The review covers all declared scope; no significant areas skipped.",
+          "scoringGuide": "5 = full coverage of all declared scope; 1 = major areas of scope unreviewed."
+        },
+        {
+          "id": "accuracy",
+          "weight": 0.35,
+          "description": "Findings are technically correct and actionable; no false positives that would mislead.",
+          "scoringGuide": "5 = all findings verified and reproducible; 1 = majority of findings are incorrect."
+        },
+        {
+          "id": "actionability",
+          "weight": 0.2,
+          "description": "Each finding includes a concrete recommendation that a developer can act on.",
+          "scoringGuide": "5 = every finding has a specific fix recommendation; 1 = findings listed with no guidance."
+        },
+        {
+          "id": "coverage",
+          "weight": 0.05,
+          "description": "Severity spectrum represented appropriately — not only blocker findings listed.",
+          "scoringGuide": "5 = critical, major, minor, and info findings all present where appropriate; 1 = only one severity level used throughout."
+        },
+        {
+          "id": "clarity",
+          "weight": 0.05,
+          "description": "Review report is structured and a stakeholder can understand and triage findings.",
+          "scoringGuide": "5 = clear, prioritised, well-structured; 1 = unstructured list of complaints."
+        }
+      ]
+    },
+    "hardThresholds": [
+      { "criterionId": "thoroughness", "min": 4 },
+      { "criterionId": "accuracy", "min": 4 }
+    ]
+  },
+
+  "invariants": [
+    {
+      "kind": "file-exists",
+      "id": "progress-file",
+      "path": "progress.json"
+    }
+  ],
+
+  "recovery": {
+    "resumeStrategy": "reset",
+    "maxReworkPerStage": 5,
+    "contextResetThresholdRatio": 0.65,
+    "stuckDetection": {
+      "noProgressReworkLimit": 3
+    }
+  },
+
+  "budget": {
+    "maxTokens": 600000,
+    "maxWallClockMinutes": 180,
+    "perStageTokenCap": 150000
+  },
+
+  "benchGoal": {
+    "goal": "Review a simple calculator.js file for bugs, style issues, and edge cases, then write findings to review.md.",
+    "expectedArtifacts": ["review.md"],
+    "maxTokens": 50000,
+    "maxWallClockMs": 120000
+  }
+}

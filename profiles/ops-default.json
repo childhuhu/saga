@@ -1,0 +1,105 @@
+{
+  "id": "ops-default",
+  "version": "0.1.0",
+  "description": "Home/personal infrastructure operations: network diagnosis, device configuration, recurring-issue remediation. Command-based hard checks. Reads/writes OpenClaw memory for recurring state.",
+  "domain": "ops",
+
+  "assumedModel": {
+    "minTier": "standard",
+    "capabilities": ["tool-use", "code"]
+  },
+
+  "strategy": {
+    "kind": "planner-worker-evaluator",
+    "fixerEnabled": false
+  },
+
+  "evaluator": {
+    "intensity": "deep",
+    "fewShotCalibrationPath": "data/few-shot-rubrics/ops.md",
+    "checklist": {
+      "hard": [
+        {
+          "id": "H1",
+          "title": "Diagnosis grounded",
+          "passDescription": "every claim about device/network state is backed by a command hard check (ping, traceroute, ip, iw, log tail, …). No claims-without-evidence.",
+          "failReworkDescription": "some claims lack command evidence; running the right diagnostic commands would produce it",
+          "failEscalateDescription": "the device or network is genuinely unreachable or the issue requires physical access / hardware replacement"
+        },
+        {
+          "id": "H2",
+          "title": "Remediation reversible",
+          "passDescription": "for every change command produced, a corresponding revert command is documented, or one-way changes are called out explicitly",
+          "failReworkDescription": "revert commands are missing for some changes but can be derived from the runbook",
+          "failEscalateDescription": "changes were applied destructively with no feasible revert path (e.g., overwritten config without backup)"
+        },
+        {
+          "id": "H3",
+          "title": "Memory write",
+          "passDescription": "the terminal stage appends a structured entry to OpenClaw active memory with: symptom, diagnosis, remediation, devices touched",
+          "failReworkDescription": "memory entry is partially written or missing some fields; can be completed in rework",
+          "failEscalateDescription": "the issue could not be resolved, so a memory entry would be misleading or premature"
+        }
+      ],
+      "soft": [
+        { "id": "S1", "title": "Diagnostic completeness", "weight": 0.4, "scoringGuide": "5 = systematic elimination of hypotheses with evidence; 1 = guesswork without diagnostics" },
+        { "id": "S2", "title": "Risk awareness", "weight": 0.3, "scoringGuide": "5 = every change evaluated for blast radius with rollback plan; 1 = changes applied blindly" },
+        { "id": "S3", "title": "Memory entry quality", "weight": 0.2, "scoringGuide": "5 = future runs can reproduce diagnosis and remediation from entry alone; 1 = vague or missing" },
+        { "id": "S4", "title": "Clarity", "weight": 0.1, "scoringGuide": "5 = clear runbook any admin can follow; 1 = disorganized or incomplete" }
+      ]
+    },
+    "rubric": {
+      "criteria": [
+        {
+          "id": "diagnostic-completeness",
+          "weight": 0.4,
+          "description": "Systematic elimination of hypotheses with command evidence.",
+          "scoringGuide": "5 = every claim backed by command output; 1 = claims without evidence."
+        },
+        {
+          "id": "risk-awareness",
+          "weight": 0.3,
+          "description": "Every change evaluated for blast radius with rollback plan.",
+          "scoringGuide": "5 = all changes have revert documented; 1 = destructive without backup."
+        },
+        {
+          "id": "memory-entry-quality",
+          "weight": 0.2,
+          "description": "Structured memory entry for future recurrence lookups.",
+          "scoringGuide": "5 = future runs can reproduce fix from entry; 1 = vague or missing."
+        },
+        {
+          "id": "clarity",
+          "weight": 0.1,
+          "description": "Clear runbook any admin can follow.",
+          "scoringGuide": "5 = step-by-step with expected outputs; 1 = disorganized."
+        }
+      ]
+    },
+    "hardThresholds": [
+      { "criterionId": "diagnostic-completeness", "min": 3 }
+    ]
+  },
+
+  "recovery": {
+    "resumeStrategy": "auto",
+    "maxReworkPerStage": 3,
+    "contextResetThresholdRatio": 0.7,
+    "stuckDetection": {
+      "noProgressReworkLimit": 2
+    }
+  },
+
+  "budget": {
+    "maxTokens": 800000,
+    "maxWallClockMinutes": 240,
+    "perStageTokenCap": 200000
+  },
+
+  "benchGoal": {
+    "goal": "Diagnose why the home WiFi drops every evening around 9pm and produce a runbook with revert commands.",
+    "expectedArtifacts": ["diagnosis.md", "runbook.md"],
+    "maxTokens": 50000,
+    "maxWallClockMs": 120000
+  }
+}

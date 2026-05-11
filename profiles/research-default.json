@@ -1,0 +1,161 @@
+{
+  "id": "research-default",
+  "version": "0.1.0",
+  "description": "Deep research profile. Uses citation footnotes (e.g., [1], [2]) with sources listed at document end. Users can assess reliability themselves. No hard threshold on groundedness. Suited for literature reviews, comprehensive surveys, and multi-source report generation.",
+  "domain": "research",
+
+  "assumedModel": {
+    "minTier": "strong",
+    "capabilities": ["long-context", "tool-use"]
+  },
+
+  "strategy": {
+    "kind": "single-worker",
+    "evaluatorEnabled": true
+  },
+
+  "bootstrap": [
+    {
+      "id": "read-task",
+      "description": "Read the saga task.json so the worker knows the research goal and current stage.",
+      "kind": "read-file",
+      "spec": { "path": "task.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-progress",
+      "description": "Read progress.json to see which sources and claims are already verified.",
+      "kind": "read-file",
+      "spec": { "path": "progress.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-latest-checkpoint",
+      "description": "Read the most recent checkpoint to resume context and source list.",
+      "kind": "read-file",
+      "spec": { "path": "checkpoints/latest.json", "optional": true },
+      "failurePolicy": "report-and-continue"
+    }
+  ],
+
+  "progressSchema": {
+    "kind": "checklist",
+    "itemFields": {
+      "source": "string",
+      "claim": "string",
+      "verified": "boolean",
+      "notes": "string"
+    },
+    "appendOnly": true
+  },
+
+  "contractTemplate": {
+    "requiredSections": ["scope", "doneCriteria", "verificationPlan", "outOfScope"],
+    "minMachineChecks": 1,
+    "maxNegotiationRounds": 3
+  },
+
+  "evaluator": {
+    "intensity": "deep",
+    "requireExternalCheck": false,
+    "fewShotCalibrationPath": "data/few-shot-rubrics/research.md",
+    "checklist": {
+      "hard": [
+        {
+          "id": "H1",
+          "title": "Citations present",
+          "passDescription": "citations exist and link to identifiable sources",
+          "failReworkDescription": "citations are missing but sources clearly exist to support the claims",
+          "failEscalateDescription": "the claims are about proprietary/internal information that cannot be publicly cited"
+        },
+        {
+          "id": "H2",
+          "title": "Completeness",
+          "passDescription": "goal is addressed with specifics",
+          "failReworkDescription": "goal is partially addressed; more work would help",
+          "failEscalateDescription": "the goal asks for information not publicly available"
+        },
+        {
+          "id": "H3",
+          "title": "Factual specificity",
+          "passDescription": "≥5 specific verifiable facts (names, dates, figures)",
+          "failReworkDescription": "mostly generic statements; more research can fix",
+          "failEscalateDescription": "specifics genuinely do not exist in public domain"
+        }
+      ],
+      "soft": [
+        { "id": "S1", "title": "Source diversity", "weight": 0.3, "scoringGuide": "5 = diverse primary + secondary; 1 = single source repeated" },
+        { "id": "S2", "title": "Analytical depth", "weight": 0.3, "scoringGuide": "5 = synthesis with identified tensions; 1 = list of facts" },
+        { "id": "S3", "title": "Actionable conclusions", "weight": 0.2, "scoringGuide": "5 = specific action items with rationale; 1 = description only" },
+        { "id": "S4", "title": "Clarity and structure", "weight": 0.2, "scoringGuide": "5 = clear headings, logical flow; 1 = disorganized" }
+      ]
+    },
+    "rubric": {
+      "criteria": [
+        {
+          "id": "completeness",
+          "weight": 0.25,
+          "description": "All declared research questions and done-criteria are addressed with evidence.",
+          "scoringGuide": "5 = every question answered with direct evidence; 1 = most questions unanswered."
+        },
+        {
+          "id": "groundedness",
+          "weight": 0.35,
+          "description": "Factual claims use citation footnotes (e.g., [1], [2]) with sources listed in 'References' section.",
+          "scoringGuide": "5 = all key claims have footnote citations or [citation needed] markers; 1 = significant claims without any citation mechanism."
+        },
+        {
+          "id": "source-diversity",
+          "weight": 0.2,
+          "description": "Multiple independent sources consulted; not over-reliant on a single source.",
+          "scoringGuide": "5 = diverse primary and secondary sources; 1 = single source used throughout."
+        },
+        {
+          "id": "analytical-depth",
+          "weight": 0.1,
+          "description": "Analysis goes beyond summary; synthesises across sources and identifies tensions.",
+          "scoringGuide": "5 = genuine synthesis with identified contradictions; 1 = raw summaries only."
+        },
+        {
+          "id": "clarity",
+          "weight": 0.1,
+          "description": "Report is structured, readable, and a successor worker could resume from it.",
+          "scoringGuide": "5 = self-contained, well-structured; 1 = requires original chat to interpret."
+        }
+      ]
+    },
+    "hardThresholds": [
+      { "criterionId": "completeness", "min": 3 }
+    ]
+  },
+
+  "invariants": [
+    {
+      "kind": "file-exists",
+      "id": "progress-file",
+      "path": "progress.json"
+    }
+  ],
+
+  "recovery": {
+    "resumeStrategy": "reset",
+    "maxReworkPerStage": 3,
+    "contextResetThresholdRatio": 0.65,
+    "stuckDetection": {
+      "noProgressReworkLimit": 2
+    }
+  },
+
+  "budget": {
+    "maxTokens": 800000,
+    "maxWallClockMinutes": 240,
+    "perStageTokenCap": 200000
+  },
+
+  "benchGoal": {
+    "goal": "Summarise the key arguments for and against static typing in programming languages and write a brief report to report.md.",
+    "expectedArtifacts": ["report.md"],
+    "maxTokens": 50000,
+    "maxWallClockMs": 120000
+  }
+}

@@ -1,0 +1,147 @@
+{
+  "id": "generic-default",
+  "version": "0.1.0",
+  "description": "Domain-neutral default profile. Uses citation footnotes [N] with References section. No hard threshold on groundedness. Suitable for any moderately important multi-step task.",
+  "domain": "generic",
+
+  "assumedModel": {
+    "minTier": "standard",
+    "capabilities": ["long-context", "tool-use"]
+  },
+
+  "strategy": {
+    "kind": "single-worker",
+    "evaluatorEnabled": true
+  },
+
+  "bootstrap": [
+    {
+      "id": "read-task",
+      "description": "Read the saga task.json so the worker knows the goal and current stage.",
+      "kind": "read-file",
+      "spec": { "path": "task.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-progress",
+      "description": "Read progress.json to see what is already done.",
+      "kind": "read-file",
+      "spec": { "path": "progress.json" },
+      "failurePolicy": "fail-fast"
+    },
+    {
+      "id": "read-latest-checkpoint",
+      "description": "Read the most recent checkpoint, if any, to resume context.",
+      "kind": "read-file",
+      "spec": { "path": "checkpoints/latest.json", "optional": true },
+      "failurePolicy": "report-and-continue"
+    }
+  ],
+
+  "progressSchema": {
+    "kind": "checklist",
+    "itemFields": {
+      "title": "string",
+      "notes": "string"
+    },
+    "appendOnly": true
+  },
+
+  "contractTemplate": {
+    "requiredSections": ["scope", "doneCriteria", "verificationPlan", "outOfScope"],
+    "minMachineChecks": 1,
+    "maxNegotiationRounds": 3
+  },
+
+  "evaluator": {
+    "intensity": "light",
+    "requireExternalCheck": false,
+    "fewShotCalibrationPath": "data/few-shot-rubrics/generic.md",
+    "checklist": {
+      "hard": [
+        {
+          "id": "H1",
+          "title": "Goal addressed",
+          "passDescription": "the artifact directly answers the stated deliverable",
+          "failReworkDescription": "goal is partially addressed; more work would help",
+          "failEscalateDescription": "the goal is ambiguous or self-contradictory and cannot be resolved without human input"
+        },
+        {
+          "id": "H2",
+          "title": "Self-contained",
+          "passDescription": "a reader who didn't see the chat can understand the output",
+          "failReworkDescription": "output assumes chat context; can be made self-contained in rework",
+          "failEscalateDescription": "the output depends on ephemeral state that cannot be captured"
+        },
+        {
+          "id": "H3",
+          "title": "Done-criteria match",
+          "passDescription": "the worker's claimed done-criteria match the original plan (no scope drift)",
+          "failReworkDescription": "minor scope drift detected; can be corrected in rework",
+          "failEscalateDescription": "the plan's criteria are contradictory and cannot all be satisfied"
+        }
+      ],
+      "soft": [
+        { "id": "S1", "title": "Completeness", "weight": 0.3, "scoringGuide": "5 = all declared criteria met; 1 = major gaps" },
+        { "id": "S2", "title": "Quality", "weight": 0.3, "scoringGuide": "5 = accurate, well-executed; 1 = poor quality" },
+        { "id": "S3", "title": "Clarity", "weight": 0.2, "scoringGuide": "5 = clear and self-contained; 1 = requires original chat" },
+        { "id": "S4", "title": "Relevance", "weight": 0.2, "scoringGuide": "5 = stays on-topic throughout; 1 = significant digressions" }
+      ]
+    },
+    "rubric": {
+      "criteria": [
+        {
+          "id": "completeness",
+          "weight": 0.5,
+          "description": "All declared done-criteria are satisfied with evidence.",
+          "scoringGuide": "5 = every criterion has direct evidence; 1 = most criteria are unsupported."
+        },
+        {
+          "id": "groundedness",
+          "weight": 0.3,
+          "description": "Claims use citation footnotes [N] with References section.",
+          "scoringGuide": "5 = all claims have footnotes or [citation needed] markers; 1 = significant unsourced narration."
+        },
+        {
+          "id": "clarity",
+          "weight": 0.2,
+          "description": "Output is structured and a successor worker could resume from it.",
+          "scoringGuide": "5 = self-contained handoff; 1 = requires the original chat to make sense."
+        }
+      ]
+    },
+    "hardThresholds": [
+      { "criterionId": "completeness", "min": 3 }
+    ]
+  },
+
+  "invariants": [
+    {
+      "kind": "file-exists",
+      "id": "progress-file",
+      "path": "progress.json"
+    }
+  ],
+
+  "recovery": {
+    "resumeStrategy": "auto",
+    "maxReworkPerStage": 3,
+    "contextResetThresholdRatio": 0.7,
+    "stuckDetection": {
+      "noProgressReworkLimit": 2
+    }
+  },
+
+  "budget": {
+    "maxTokens": 500000,
+    "maxWallClockMinutes": 180,
+    "perStageTokenCap": 120000
+  },
+
+  "benchGoal": {
+    "goal": "Sort a list of 10 strings alphabetically and write the result to output.txt, one per line.",
+    "expectedArtifacts": ["output.txt"],
+    "maxTokens": 50000,
+    "maxWallClockMs": 120000
+  }
+}
