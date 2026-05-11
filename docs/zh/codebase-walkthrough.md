@@ -204,6 +204,29 @@ export interface DoneCriterion {
 
 这和普通聊天系统最大的差别就在这里——Saga 把"记忆"从对话历史中抽出来，变成了文件系统中的显式、可校验、可重建的状态。
 
+### 3.7 Clarification：开始之前先问清楚
+
+长任务里另一种隐性失败是"理解错了任务在做错的方向上跑很远"。这件事 prompt 里写"如果有疑问请先问"几乎没用——模型经常自我说服已经听懂了。
+
+Saga 在 `SagaState` 里把澄清也建成显式状态：
+
+```ts
+clarificationRound: number;
+clarificationHistory: Array<{ question: string; answer: string }>;
+clarificationLimit: number;     // 从 profile 来：research/ops=2，curation/review/generic=1
+```
+
+主循环里 continue-site 0 在 plan 还没出现、且 `clarificationRound < clarificationLimit` 时强制进入澄清：调 `runClarifier` 拿到一组问题，写进 `transition: { kind: 'clarifying_requirements', questions: [...] }`，把控制权交还 agent。agent 念给用户后，用户答 → `saga_advance(humanInput="...")` → 这段对话被追加到 `clarificationHistory`，再决定要不要继续问。
+
+这里有几个有意思的设计：
+
+- **不同 profile 默认轮数不同**——research 和 ops 默认 2 轮，因为这两个领域的歧义最大；curation/review/generic 默认 1 轮就够。`defaultClarificationRounds` 在 `src/profiles/index.ts` 里一目了然，加新 profile 时强制你想清楚这件事。
+- **用户可以提前喊停**——`if (/够了|不用问了|skip|enough|no more/i.test(input.humanInput))` 这条会直接退出澄清。澄清是脚手架，不是强制流程。
+- **澄清答案不只是丢给 planner 看一眼**——planner 阶段会把 `clarificationHistory` **直接拼到目标**里（`enrichedGoal = goal + "\n\nClarifications:\n" + history`）。这样后续每次 worker 注入都包含这些答案，不会到第三个 stage 就忘了用户最初说"不要用国外来源"。
+- **澄清也是事件**——虽然没有专门的 `clarification_received` 事件，整个澄清历史会随 saga state 一起被序列化到 `state.json`，恢复时同步还原。
+
+skill 那一侧也配合：每个 `SKILL.md` 里写明 Q1/Q2 是什么（如 saga-research 的 Q1 是"内部资料 / 公开网络 / 两者"，Q2 是"交付形式是什么"）。这两个问题不是 runtime 决定的，是领域知识，所以放在 skill 里。runtime 只负责把澄清轮数封死、把答案存好、不让 planner 在没有 clarification 的情况下提前开跑。
+
 ---
 
 ## 4. Continue-site 模式：为什么 advance() 是一长串 if
@@ -251,6 +274,48 @@ default          : worker_mode_injected → continue_worker_now
 - **状态对应的行为** 由 advance() 里对应的 `if` 块负责
 
 新加一种恢复策略，只要在 Transition 里加一种 kind，再在 advance() 里加一个 `if` 块。这是一种"边界静态可检查、行为线性可读"的折中。
+
+### 4.4 Worker-as-injection：一个被低估的成本判断
+
+很多 agent harness 在跑下一个 stage 时会**开新的 sub-agent / subagent session**，给它独立的上下文。Saga 反过来：**worker 不是新 agent**，它就是 host agent 的下一轮，只是这一轮的 prompt 被 harness 替换成了 worker-mode 提示块。
+
+落到代码上，`saga_advance` 返回的 result 里直接带一个 `workerContext` 字段（见 `src/adapters/tool-registrar.ts`）：
+
+```ts
+workerContext: [
+  `## Worker Mode: Stage (1/4) "${stage.title}"`,
+  `Saga: ${sagaId} | Stage: ${stage.id}`,
+  `Goal: ${stage.goal}${issues}`,
+  '',
+  'BEFORE starting work: tell the user in one line that you are beginning this stage.',
+  'Example: "▶ Stage 1/4 开始：..."',
+  '',
+  'DO NOT end this conversation. Execute the stage task now:',
+  loadWorkerTools(profile),       // per-profile 工具提示
+  'Call saga_advance(workerFinished=true, artifacts=[{path,content},...]) when done',
+  ...(requiredFiles.length > 0 ? ['Required artifacts:', ...requiredFiles] : []),
+  '',
+  'AFTER saga_advance returns: tell the user in one line that this stage is done.',
+  'Example: "✅ Stage 1/4 完成：..."',
+].join('\n')
+```
+
+为什么不开 sub-agent？三个原因：
+
+1. **省一次上下文初始化**——开新 sub-agent 意味着新 session 要从头跑 system prompt、加载所有 skills、加载所有工具。每个 stage 都开一个，开销不可忽略。
+2. **不需要重新教 agent 系统是怎么用的**——host agent 知道怎么调 `saga_advance`、知道怎么读 artifacts、知道 OpenClaw 的工具。换 sub-agent 就要重新引导。
+3. **更易于让 saga 退出当前轮控制**——`saga_advance(workerFinished=true)` 完成后，控制权直接回到 host agent，它可以决定要不要继续下一 stage、要不要先问用户、要不要展示中间结果。如果是 sub-agent，需要额外协议来表达"我做完了请释放"。
+
+worker-as-injection 同时有 **两条注入通道**，分别解决不同问题：
+
+- **通道 A：tool result 里的 `workerContext` 字段** —— 包含在 `saga_advance` 的返回里，agent 本来就要看的，无副作用
+- **通道 B：`api.enqueueNextTurnInjection`** —— 把 worker-mode 文本作为系统级 prompt 前缀塞进下一轮 agent 的 context（`placement: 'prepend_context'`，30 分钟 TTL）
+
+两条通道**信息冗余**——通道 A 直接、明显；通道 B 即便 agent 忽略 tool result，下一轮上下文里也会出现 worker mode 提示。在 LLM 主流程会"漏看"工具返回某些字段的现实下，冗余是有意的。
+
+同时配合的是 **system event 通道**（通道 C，见后面 6.4）：每次状态变化把 `buildProgressSummary` 的一行进度发到 OpenClaw 的实时 UI 通道，**不参与 agent 的决策**，只让用户看见。
+
+三条通道职责分明：A 给 agent 看（结构化）、B 给 agent 看（系统提示）、C 给人看（UI）。这种"按观众分通道"的设计在长任务 harness 里很重要——长任务里同一份信息常要给两群不同的消费者，混着发会让 agent 把 UI 提示当指令执行。
 
 ---
 
@@ -359,9 +424,37 @@ default          : worker_mode_injected → continue_worker_now
 
 ### 6.4 `src/coordinator/progress.ts`：把状态投影成一行人话
 
-它就是 `buildProgressSummary(state)`——把 SagaState 投影成一个供前端显示的简洁对象（`display` 是一行字符串，`cursor` / `total` / `stageTitle` 是结构化的）。adapter 把它发到 OpenClaw 的 system event 通道，让 UI 实时看到进展。
+它的核心是 `buildProgressSummary(state)`——把 SagaState 投影成一个轻量对象：
 
-这件事看起来小，但很重要：长任务里"用户不知道现在在做什么"是真实的焦虑来源。
+```ts
+{
+  display: "▶ Stage 2/4: 数据来源调研 (running)",   // 给人看的一行
+  cursor: 1,                                     // 给程序消费
+  total: 4,
+  stageTitle: "数据来源调研",
+  status: "running"
+}
+```
+
+`display` 这一行是一种典型的"为不同观众准备的状态"：跟 §4.4 末尾说的三条通道呼应——agent 看的是 tool 返回里的 `workerContext`（结构化、用来工作），UI 看的是 `display`（精简、用来安心）。
+
+发到 UI 的路径在 `src/adapters/openclaw-plugin.ts` 的 `queueWorkerModeInjection` 里：
+
+```ts
+const enqueueEvent = api.runtime?.system?.enqueueSystemEvent;
+if (enqueueEvent && activeSessionKey) {
+  const progress = buildProgressSummary(state);
+  enqueueEvent(progress.display, { sessionKey: activeSessionKey });
+}
+```
+
+这件事看起来小，但承担的工程意义不小：
+
+- **`enqueueSystemEvent` 是 OpenClaw 提供的实时通道**——它不是聊天回复，而是显式的进度推送。UI（聊天界面、TUI、Web）订阅这条通道就能在 agent 还在埋头干活时把"现在在做 Stage 2/4"提示出来。
+- **不参与 agent 决策**——这条通道是单向的，agent 不会"看到自己刚才推送了什么"，也不会被自己的进度提示反作用。这避免了一类很容易出现的循环（模型看到"已完成 30%"会强化"我做对了"的判断）。
+- **失败也会被映射成 display 字符串**——`progress.display` 在 `awaiting_human`、`eval_deep_pending`、`recovery_attempt` 这些 transition 下都有相应文本。用户看到的不只是"正在运行"，而是"正在评审"或"等待你的输入"，这些都是 progress.ts 在做的状态翻译。
+
+长任务里"用户不知道现在在做什么"是真实的焦虑来源。Saga 把这个翻译层抽出来作为一个**纯函数**——不依赖 OpenClaw，只接受 SagaState 返回展示对象。如果以后接到非 OpenClaw 的 UI（CLI、Web 直连），只需要换一个发送适配器，`buildProgressSummary` 本身不动。
 
 ### 6.5 `src/stage-spec/parser.ts` 和 `done-criteria.ts`：守住"loose 但显式"
 
@@ -402,30 +495,114 @@ default          : worker_mode_injected → continue_worker_now
 
 这个文件最重要的暗含约定是：**所有领域差异都在 profile JSON 里**。要改一种 profile 的评估逻辑，去改 `profiles/<id>-default.json` 的 checklist，而不是改这个文件。
 
-### 6.9 `src/recovery/cascading-chain.ts`：守住"失败也有梯度"
+#### escalate 和 passed=false 是两件事
 
-这是恢复级联的全部逻辑。它根据 `state.recoveryAttempts[stageId]` 的次数决定该走哪一层：
+deep evaluator 返回的 JSON 有四个字段：
 
-- attempts 0–1 → `fix-attempt`（最便宜：把 evaluator issues 注入下一轮 worker）
-- attempts 2 → `microcompact-retry`（清旧 eval 上下文，重新注入）
-- attempts 3 → `full-rework`（更激进，stage 等于重启）
-- attempts ≥ MAX_RECOVERY_ATTEMPTS（4） → `terminal`
+```ts
+{ passed: boolean, score: 1-5, issues: string[], escalate: boolean }
+```
 
-`applyRecovery(state, decision)` 把决定应用到 state——它会把 transition 改成对应的 kind，attempts 自增。
+大多数评估器只有 `passed`/`score`。Saga 多出来一个 `escalate`，原因来自一个很具体的失败模式：
 
-这种分层很像成熟工程系统里的故障分级：不是所有问题都值得同一种恢复策略。
+> Worker 写了一份关于"某公司 2026 财年自动驾驶数据采集量"的报告。evaluator 翻 H3「≥5 specific verifiable facts」失败——因为这家公司从未公开过这个数字。
 
-### 6.10 `src/recovery/classifiers.ts`：决定何时早早放弃
+如果只有 `passed: false`，系统会把这当成"返工可达"，让 worker 再去搜一遍、再再搜一遍，循环 4 次直到 terminal。但**问题根本不在 worker 的努力上**，它在于"用户问了一个公共信息里不存在答案的问题"。
 
-很多时候应该**不进入恢复级联**，因为问题不是"再试一次能解决"那种。这个文件就是判别器：
+`escalate: true` 就是 evaluator 说："**我确信再来一轮也找不到，这个 criterion 在结构上不可达。**" advance() 看到 `escalate: true` 后会进 `awaiting_human` 而不是恢复级联：
 
-- `classifyHardCheckFailure` —— 在 hard check 失败里找 403/404/unauthorized/rate limit 模式，发现就转为 `source_unavailable` 终结
-- `classifyEvalFailure` —— 在 evaluator 失败里找"context window exceed / token limit"模式，发现就转为 `model_capability_exceeded` 终结
-- `classifyRootCause` —— 综合 verdict / hard check / worker diagnostics，决定是 `network_transient`（重试）、`information_unavailable`（升人）还是 `quality_insufficient`（继续恢复）
+```ts
+if (verdict.escalate) {
+  state = { ...state, transition: { kind: 'awaiting_human', reason } };
+  return {
+    nextAction: 'await_human',
+    diagnostic: `⚠️ 验收标准无法达成，需要你来决定下一步：\n\n${reason}\n\n选项：
+1. 放弃任务：调用 saga_cancel
+2. 放松标准后继续：告诉我放松哪些条件，我调用 saga_advance(humanInput="放松条件：...") 重新评估`,
+  };
+}
+```
 
-这个模块体现的是另一种工程取舍：**好的恢复系统不只是会重试，更会判断"什么时候不该重试"**。
+这条选择对人来说至关重要：
 
-### 6.11 `src/compaction/microcompact.ts`：把上下文做小，不是做大
+- **fail-rework**：worker 努力不够，evaluator 看到方向对、来源对、就是细节没补齐——这值得重试
+- **fail-escalate**：worker 没做错，criterion 写得不切实际或信息根本不存在——这要回到人来调标准，不是再让模型重跑
+
+为了让 LLM 真的会用 escalate 而不是随便点一下，profile JSON 里每一个 H 项都**显式提供三段描述**：
+
+```json
+{
+  "id": "H1",
+  "title": "Citations present",
+  "passDescription": "citations exist and link to identifiable sources",
+  "failReworkDescription": "citations are missing but sources clearly exist to support the claims",
+  "failEscalateDescription": "the claims are about proprietary/internal information that cannot be publicly cited"
+}
+```
+
+也就是说 LLM 是被**强制选择**到三态里的一态。"不知道选哪个"在这套设计里不存在——三段描述就是用来让边界清晰的。`data/few-shot-rubrics/<profile>.md` 还提供 worked example，把"为什么这个 case 是 escalate、那个 case 是 rework"展示给评估者看。
+
+如果不区分这两态，saga 就只剩两个选项：要么循环重试到 worker_unrecoverable，要么 evaluator 学会用低标准放水。两者都坏。
+
+### 6.9 `src/recovery/cascading-chain.ts` + `classifiers.ts`：失败也要有梯度，但要先判断值不值得重试
+
+这两个文件合起来回答同一个问题：**stage 失败了，下一步该做什么？**
+
+把它们看成两层串联的决策：
+
+```
+hard checks 或 deep eval 返回失败
+   │
+   ▼
+classifyRootCause / classifyHardCheckFailure / classifyEvalFailure
+   │
+   ├─ 匹配 "context window exceeded" → terminate("model_capability_exceeded")  ← 不进恢复
+   ├─ 匹配 403/404/unauthorized      → terminate("source_unavailable")        ← 不进恢复
+   ├─ 网络超时（ECONNRESET / timeout）→ retryStrategy: 'fix-attempt'           ← 进恢复，但归为暂时性
+   ├─ 已搜关键词 + 所有 url 都 4xx   → retryStrategy: 'awaiting_human'         ← 不进恢复，升人
+   └─ 其它（quality_insufficient）   → retryStrategy: 'fix-attempt'           ← 进恢复
+   │
+   ▼ 仅当 classifier 说"还可以重试"才进入级联
+classifyRecovery(state.recoveryAttempts[stageId])
+   │
+   ├─ attempts 0–1 → fix-attempt        把 issues 注入下一轮 worker（最便宜）
+   ├─ attempts 2   → microcompact-retry 把过去的 eval 压缩到 200 字符再注入（去噪）
+   ├─ attempts 3   → full-rework        重置 stage，从干净状态重新 worker（重启）
+   └─ attempts 4+  → terminate("worker_unrecoverable")
+```
+
+#### 一个具体的例子怎么走
+
+stage 是 "调研某公司 2026 财年自动驾驶数据采集量"，目标是产出 `stages/stage-02-report.md` 含 ≥1500 字。
+
+- **第 1 轮 worker：** 跑 web_fetch、写了 800 字。提交 `saga_advance(workerFinished=true, artifacts=[{path:"stages/stage-02-report.md", content:"..."}])`。
+- **Hard check 失败：** `file-size-gt minBytes: 1500` 失败，字节数 800 < 阈值 1125（tolerance 0.75）。
+- **classifyHardCheckFailure：** 失败原因不匹配 403/404 等模式 → category = "recoverable"。
+- **classifyRootCause：** 没有网络错误日志、没有"all urls 4xx"模式 → kind = "quality_insufficient", retryStrategy = "fix-attempt"。
+- **classifyRecovery（attempt=0）：** 选 layer 0，method = "fix-attempt"，transition = `{ kind: 'eval_needs_fix_attempt', stageId, attempt: 1, issues: ['file is 800 bytes, expected ~1500'] }`。
+- **第 2 轮 worker：** before_prompt_build hook 注入"上一轮失败原因：file is 800 bytes, expected ~1500"。worker 重试，写了 1100 字仍不够。
+- **classifyRecovery（attempt=1）：** 还是 fix-attempt（layer 0–1）。
+- **第 3 轮 worker：** 还是 1200 字（context 在累积，worker 注意力被旧的 eval 反馈分散）。
+- **classifyRecovery（attempt=2）：** 升级到 microcompact-retry。harness 把上一轮 eval 压缩成 200 字符摘要，重新构造一份干净的 worker mode 注入，第 4 轮 worker 看到的不再是冗长历史而是浓缩的"上次主要问题是字数 + 缺少 3 个具体数字"。
+- **第 4 轮 worker：** 写了 1700 字，含 5 个具体数字。
+- **Hard check 通过，进 deep eval：** evaluator 走 H1/H2/H3——
+  - H1 ✓ 引用有了
+  - H2 ✓ 目标被回答
+  - H3 ✗ "≥5 verifiable facts"——其中 3 个数字 worker 是估算的，找不到来源
+- **evaluator 选 FAIL-ESCALATE：** "specifics genuinely do not exist in public domain" 这条描述匹配。verdict = `{ passed: false, escalate: true, issues: [...] }`。
+- **advance() 看到 escalate：** 不进 classifyRecovery，直接 `awaiting_human`，给用户两个选项（放宽标准 / 放弃任务）。
+
+这条路走下来一共 4 轮 worker + 1 次 escalate，对应 4 个 `recovery_attempt` 事件和 1 个 `deep_eval_completed` 事件，全在 `events.jsonl` 里能复盘。
+
+#### 这种分层守住了什么
+
+- **效率**：网络超时不会被走成 microcompact（贵且对原因没意义）；403 不会被走成 4 轮重试。便宜的层只对可能修的问题花成本。
+- **可终止**：每一种失败最终都能落到一个明确的 termination reason，不会无限循环。
+- **可观测**：`recovery_attempt` 事件带 `method` 字段，事后能直接统计"哪些 stage 走到 microcompact / 哪些 stage 走到 escalate"。这是 calibration 的依据。
+
+如果有一天你想给 Saga 加一种新的恢复策略，比如"在 fix-attempt 之间插一层 web-search-fallback"，路径就是：在 `Transition` 加 kind → 在 `cascading-chain.ts` 的 `classifyRecovery` 加 case → 在 `advance.ts` 加 continue-site。三个文件，结构稳定。
+
+### 6.10 `src/compaction/microcompact.ts`：把上下文做小，不是做大
 
 非常短的一个文件。`microcompactEval(full, stageId)` 接受一份完整的 eval 输出，产出 `{ verdict, score, summary (≤200 chars), pointer }`。`isAlreadyCompacted` 检查一份数据是不是已经被压缩过。
 
@@ -433,19 +610,19 @@ default          : worker_mode_injected → continue_worker_now
 
 这个模块呼应到 §2.3：**真正抗 context pressure 的方法不是"压缩历史然后继续"，而是"把不必要的细节扔掉，再继续"**。
 
-### 6.12 `src/compaction/prefix-builder.ts` 和 `context-collapse.ts`：渐进式 worker context
+### 6.11 `src/compaction/prefix-builder.ts` 和 `context-collapse.ts`：渐进式 worker context
 
 `prefix-builder.ts` 负责构造 worker mode 的稳定前缀——saga goal、当前 stage、required artifacts。`context-collapse.ts` 用于在多次返工后塌缩多余的旧 eval 注入。
 
 两者合起来支撑一件事：每次给 worker 注入的 prompt，结构都是稳定的，只有内容（issues、context revision）变化。这让 worker 的上下文不会随着返工次数累积爆炸。
 
-### 6.13 `src/profiles/index.ts` 和 `checklist-schema.ts`：把领域差异收口
+### 6.12 `src/profiles/index.ts` 和 `checklist-schema.ts`：把领域差异收口
 
 `index.ts` 是五个 profile 的 TS 注册条目——每个有 `label`、`defaultEvaluatorMode`、`allowedHardCheckKinds`、`recommendedStageCount`、`defaultClarificationRounds`。它故意保持非常小，是因为 profile 的"真正个性"都在 JSON 里。
 
 `checklist-schema.ts` 是用 zod 定义的 `EvalChecklist`——把 `profiles/<id>-default.json` 的 `evaluator.checklist` 字段在运行时验证一遍。这一层是 §6.8 数据驱动 deep evaluator 的保险绳：JSON 改坏了会在加载时报错，而不是渲染时炸 prompt。
 
-### 6.14 `src/prompts/index.ts` 和 prompt 文件：per-profile 但不分叉
+### 6.13 `src/prompts/index.ts` 和 prompt 文件：per-profile 但不分叉
 
 `index.ts` 提供两个 loader：`loadPlannerPrompt(profile)`（拼 `planner.md` + `planner-examples-<profile>.md`）和 `loadWorkerTools(profile)`（读 `worker-tools-<profile>.md`）。
 
@@ -453,31 +630,31 @@ default          : worker_mode_injected → continue_worker_now
 
 `prompts/` 下还有几个 `.md.tpl`（`bootstrap-ritual.md.tpl`、`contract-proposal.md.tpl`、`contract-review.md.tpl`、`evaluator-intro.md.tpl`、`planner-intro.md.tpl`、`worker-intro.md.tpl`）——这些是部分被使用的模板片段，遵循"模板放磁盘、由 builder 注入数据"的同一模式。
 
-### 6.15 `src/storage/state-store.ts`：原子写 + 路径辅助
+### 6.14 `src/storage/state-store.ts`：原子写 + 路径辅助
 
 它定义了一组路径函数（`runsDir`、`sagaDir`、`statePath`、`eventsPath`、`artifactsDir`），以及 `readState` / `writeState` / `ensureSagaDir`。
 
 `writeState` 的实现很经典：写 tmp 文件 → rename。读取出问题时抛 `StateCorruptedError`（带 sagaId 上下文）。这两件事合起来保证：**任何一次状态写入，要么完整出现在磁盘上，要么完全不出现，不会有半截**。
 
-### 6.16 `src/storage/events.ts`：append-only 时间流
+### 6.15 `src/storage/events.ts`：append-only 时间流
 
 非常薄。`appendEvent(stateRoot, sagaId, event)` 一行 JSON 追加到 `events.jsonl`；`readEvents` 行行解析回来。
 
 这个文件的价值在它"看起来太简单"——简单到容易被忽视，但它就是 §2.7 解决可观测性问题的全部基础设施。所有事件类型都在 `SagaEvent` 联合里强类型保证。
 
-### 6.17 `src/storage/artifact-store.ts`：worker 出口
+### 6.16 `src/storage/artifact-store.ts`：worker 出口
 
 `writeArtifact(stateRoot, sagaId, relPath, content)` —— 写到 `runs/<sagaId>/artifacts/<relPath>`，自动建中间目录。`readArtifact`、`artifactExists` 是配套读侧。
 
 这里的关键设计在 §3.6 已经讲过：worker 不能直接写文件，只能通过 `saga_advance` 的 `artifacts` 参数提交。`tool-registrar.ts` 里的 `saga_advance` 接到 artifacts 后会调 `writeArtifact` 写盘。这条单向通道保证 evaluator 永远看到的就是 worker 提交的同一段字节。
 
-### 6.18 `src/storage/diagnostic-store.ts`：恢复用的"现场快照"
+### 6.17 `src/storage/diagnostic-store.ts`：恢复用的"现场快照"
 
 `writeDiagnostic(stateRoot, sagaId, stageId, attempt, diagnostics)` —— worker 在失败时可以通过 `saga_advance(workerDiagnostics={...})` 附带一份 `WorkerDiagnostics`（包含 `searchedTerms`、`urlsAttempted`、`errorsCaught`、`notes`），写到磁盘备查。`readLatestDiagnostic` 在恢复时被 `classifyRootCause` 读取，用来判断到底是"网络超时"还是"信息不存在"。
 
-这个模块是 §6.10 分类器能做得好的前提——分类器需要原始信号，diagnostic-store 就是这些信号的载体。
+这个模块是 §6.9 里 `classifyRootCause` 能做得好的前提——分类器需要原始信号，diagnostic-store 就是这些信号的载体。
 
-### 6.19 `src/adapters/openclaw-plugin.ts`：唯一接触宿主的地方
+### 6.18 `src/adapters/openclaw-plugin.ts`：唯一接触宿主的地方
 
 它有几个职责：
 
@@ -488,13 +665,13 @@ default          : worker_mode_injected → continue_worker_now
 
 它还做了一件值得注意的事：默认 `stateRoot` 是从 `api.rootDir` 派生的 `<openclaw-config>/workspace/saga/.saga`。这个路径**故意不在插件目录内**，目的是用户数据在插件升级/卸载时不会被误删。
 
-### 6.20 `src/adapters/tool-registrar.ts`：薄到几乎没业务
+### 6.19 `src/adapters/tool-registrar.ts`：薄到几乎没业务
 
 这是四个工具（`saga_start`、`saga_advance`、`saga_status`、`saga_cancel`）的注册器。每个工具的 handler 都很薄：解析参数、调 advance() 或读 state、整理返回值。
 
 一个值得看的细节：`saga_advance` 返回的 `workerContext` 字段是给 agent 直接展示的 worker mode 提示——里面已经把 stageId、stage title、required artifact paths、per-profile 工具提示都拼好了。这意味着 agent 不需要"二次解析"工具返回，就能直接进入工作状态。
 
-### 6.21 `src/adapters/hook-registrar.ts`：上下文注入 + 鉴权
+### 6.20 `src/adapters/hook-registrar.ts`：上下文注入 + 鉴权
 
 只有两个 hook：
 
@@ -503,7 +680,7 @@ default          : worker_mode_injected → continue_worker_now
 
 这两个 hook 都不承担触发逻辑——触发完全由 skill 路由完成，hook 只负责让"已经开始的 saga"在跨轮上下文里不被丢失。
 
-### 6.22 `src/adapters/ops-memory.ts`：仅对 ops profile 追加记忆
+### 6.21 `src/adapters/ops-memory.ts`：仅对 ops profile 追加记忆
 
 很短的一个文件。当一个 ops profile 的 saga 成功完成时，会向 OpenClaw 的活跃 memory 文件追加一条结构化记录（症状、诊断、补救、所触及设备）。下一次类似问题出现时，host agent 可以通过 `memory_search` 找到。
 
