@@ -92,25 +92,56 @@ saga_start ──► coordinator/advance.ts (continue-site 主循环)
 
 ---
 
-## 5. 安装与构建
+## 5. 安装
+
+### 通过 npm（推荐）
+
+```bash
+openclaw plugins install openclaw-plugin-saga
+openclaw gateway restart
+```
+
+固定版本：
+
+```bash
+openclaw plugins install openclaw-plugin-saga --pin
+```
+
+### 通过 GitHub Release tarball（不需要 npm）
+
+```bash
+curl -L https://github.com/childhuhu/saga/releases/latest/download/openclaw-plugin-saga.tgz \
+  -o /tmp/openclaw-plugin-saga.tgz
+openclaw plugins install /tmp/openclaw-plugin-saga.tgz
+openclaw gateway restart
+```
+
+指定版本（替换 `v1.0.0` 和文件名中的版本号）：
+
+```bash
+curl -L https://github.com/childhuhu/saga/releases/download/v1.0.0/openclaw-plugin-saga-1.0.0.tgz \
+  -o /tmp/openclaw-plugin-saga.tgz
+```
+
+### 从源码构建（贡献者）
 
 ```bash
 npm install
 npm run build
-npm test
+npm test           # 172 个单测，约 3 秒
 ```
 
-预期：172 个单测全部通过（20 个文件）。`test/regression/` 下的回归测试被 `npm test` 排除——它们跑在 Docker 里真实的 OpenClaw gateway 上。
+`npm test` 跑的是 `test/` 下 20 个单测文件。LLM 回归测试是独立的本地工作流（见 [`CONTRIBUTING.md`](CONTRIBUTING.md)），不打进发布包，也不进 CI。
 
-打包发布：
+自己打 tarball：
 
 ```bash
 npm pack
-openclaw plugins install openclaw-plugin-saga-<version>.tgz
+openclaw plugins install ./openclaw-plugin-saga-<version>.tgz
 openclaw gateway restart
 ```
 
-插件配置（可选，全部字段）：
+### 插件配置（可选）
 
 ```json
 {
@@ -118,7 +149,7 @@ openclaw gateway restart
 }
 ```
 
-不设置时默认为 `<openclaw-config>/workspace/saga/.saga`。
+不设置时默认为 `<openclaw-config>/workspace/saga/.saga`（从 `api.rootDir` 派生，与插件 tarball 安装位置解耦）。
 
 ---
 

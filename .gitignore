@@ -19,3 +19,7 @@ tmp/
 # local agent / AI assistant artifacts (per-user, do not commit)
 .claude/
 CLAUDE.md
+
+# regression test suite — requires a local Docker openclaw gateway and real
+# LLM credentials; not part of the published package or CI
+regression/

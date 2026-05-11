@@ -1,0 +1,77 @@
+name: Release
+
+# Trigger by pushing a version tag, e.g.:
+#   npm version patch        # bumps package.json + creates tag
+#   git push --follow-tags   # pushes the new tag, which fires this workflow
+#
+# This workflow:
+#   - Runs typecheck + tests + build
+#   - Publishes to npm with provenance     (needs NPM_TOKEN secret in repo settings)
+#   - Creates a GitHub Release with the
+#     packaged .tgz attached, both as
+#     <name>-<version>.tgz (reproducible)
+#     and openclaw-plugin-saga.tgz       (so `latest/download/...` URL stays stable)
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write   # required to create GitHub releases
+  id-token: write   # required for npm publish --provenance
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          registry-url: https://registry.npmjs.org
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Test
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Sanity-check tag matches package.json version
+        run: |
+          PKG_VERSION=$(node -p "require('./package.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [ "$PKG_VERSION" != "$TAG_VERSION" ]; then
+            echo "::error::tag '$GITHUB_REF_NAME' does not match package.json version '$PKG_VERSION'"
+            exit 1
+          fi
+
+      - name: Pack
+        id: pack
+        run: |
+          TARBALL=$(npm pack | tail -n1)
+          cp "$TARBALL" openclaw-plugin-saga.tgz
+          echo "tarball=$TARBALL" >> "$GITHUB_OUTPUT"
+          echo "stable=openclaw-plugin-saga.tgz" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to npm
+        run: npm publish "${{ steps.pack.outputs.tarball }}" --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ${{ steps.pack.outputs.tarball }}
+            ${{ steps.pack.outputs.stable }}
+          generate_release_notes: true

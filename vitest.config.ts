@@ -8,7 +8,6 @@ export default defineConfig({
   },
   test: {
     include: ['test/**/*.test.ts'],
-    exclude: ['test/regression/**'],
     globals: false,
     environment: 'node',
     coverage: {

@@ -51,6 +51,7 @@
     "data",
     "openclaw.plugin.json",
     "README.md",
+    "README.zh.md",
     "LICENSE"
   ],
   "openclaw": {

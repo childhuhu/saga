@@ -91,25 +91,56 @@ All state lives on disk:
 
 ---
 
-## 5. Install and build
+## 5. Install
+
+### From npm (recommended)
+
+```bash
+openclaw plugins install openclaw-plugin-saga
+openclaw gateway restart
+```
+
+Pin a specific version with `--pin`:
+
+```bash
+openclaw plugins install openclaw-plugin-saga --pin
+```
+
+### From a GitHub release tarball (no npm needed)
+
+```bash
+curl -L https://github.com/childhuhu/saga/releases/latest/download/openclaw-plugin-saga.tgz \
+  -o /tmp/openclaw-plugin-saga.tgz
+openclaw plugins install /tmp/openclaw-plugin-saga.tgz
+openclaw gateway restart
+```
+
+A specific version (replace `v1.0.0` and the filename version):
+
+```bash
+curl -L https://github.com/childhuhu/saga/releases/download/v1.0.0/openclaw-plugin-saga-1.0.0.tgz \
+  -o /tmp/openclaw-plugin-saga.tgz
+```
+
+### From source (contributors)
 
 ```bash
 npm install
 npm run build
-npm test
+npm test           # 172 unit tests, ~3s
 ```
 
-Expected: 172 unit tests pass (20 files). Regression tests under `test/regression/` are excluded from `npm test`; they run against a real OpenClaw gateway in Docker.
+`npm test` covers the 20 unit-test files under `test/`. The LLM regression suite lives in its own setup (see [`CONTRIBUTING.md`](CONTRIBUTING.md)) and is not part of the published package or CI.
 
-To produce a deployable tarball:
+To produce a local tarball you can install yourself:
 
 ```bash
 npm pack
-openclaw plugins install openclaw-plugin-saga-<version>.tgz
+openclaw plugins install ./openclaw-plugin-saga-<version>.tgz
 openclaw gateway restart
 ```
 
-Plugin config (optional, all fields shown):
+### Plugin config (optional)
 
 ```json
 {
@@ -117,7 +148,7 @@ Plugin config (optional, all fields shown):
 }
 ```
 
-If omitted, `stateRoot` defaults to `<openclaw-config>/workspace/saga/.saga`.
+If omitted, `stateRoot` defaults to `<openclaw-config>/workspace/saga/.saga` (derived from `api.rootDir`, independent of where the plugin tarball was installed).
 
 ---
 

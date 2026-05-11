@@ -69,6 +69,35 @@ Both should be green.
 
 No strict convention. Imperative mood is preferred (`add ops profile`, `fix planner parser on missing evaluator field`). Reference the area you're touching when useful (`coordinator: …`, `evaluator-deep: …`).
 
+## Releasing (maintainers)
+
+Releases are cut by tagging a commit. `.github/workflows/release.yml` runs on `v*` tags and:
+
+1. Runs typecheck + tests + build
+2. Verifies the tag matches `package.json` version
+3. `npm publish` (with provenance + public access) to npmjs
+4. Creates a GitHub Release with the `.tgz` attached as both:
+   - `openclaw-plugin-saga-<version>.tgz` (versioned, reproducible)
+   - `openclaw-plugin-saga.tgz` (stable name — used by `releases/latest/download/` URLs)
+
+### One-time setup
+
+Add an `NPM_TOKEN` secret in the repo settings (Settings → Secrets and variables → Actions → New repository secret). Generate the token at npmjs.com → Access Tokens → Generate New Token → choose **Automation** type. The token needs publish rights on `openclaw-plugin-saga`.
+
+### Cutting a release
+
+```bash
+# bump version (patch / minor / major), update package.json, create git tag
+npm version patch
+
+# push commit + tag together
+git push --follow-tags
+```
+
+The workflow takes over from there. Watch the Actions tab; on success, the new version appears on npm and as a GitHub Release.
+
+If the workflow fails halfway through (npm published but Release failed, or vice versa), fix the underlying issue and re-run only the failed jobs from the Actions tab; do not delete the tag and re-push — that breaks the provenance attestation.
+
 ## License
 
 By contributing, you agree that your contributions will be licensed under the MIT License (see [`LICENSE`](LICENSE)).
